@@ -140,9 +140,9 @@ export default function InvoiceDetail() {
         <h2>Invoice {invoice.number || invoice.no}</h2>
         <div className="helper-row">
           <button className="btn" onClick={onDownloadPdf}>Download PDF</button>
-          <button className="btn secondary" onClick={() => onSendReminder('EMAIL', true)}>Test Email</button>
+          <button className="btn secondary" onClick={() => onSendReminder('EMAIL', true)}>Test EMAIL</button>
           <button className="btn secondary" onClick={() => onSendReminder('SMS', true)}>Test SMS</button>
-          <button className="btn secondary" onClick={() => onSendReminder('WHATSAPP', true)}>Test WhatsApp</button>
+          <button className="btn secondary" onClick={() => onSendReminder('WHATSAPP', true)}>Test WHATSAPP</button>
         </div>
       </div>
 

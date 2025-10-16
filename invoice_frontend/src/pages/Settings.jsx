@@ -1,19 +1,65 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { SettingsApi } from '../api/settingsApi';
 
-export default function Settings() {
-  const [settings, setSettings] = useState({ channels: { EMAIL: true, SMS: false, WHATSAPP: false } });
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [test, setTest] = useState({ email: '', phone: '' });
+// Helper to show lightweight toast via alert fallback
+function toast(msg, isError = false) {
+  // In a minimal template, use alert; could be replaced by a better toast system
+  if (isError) {
+    window.alert(msg);
+  } else {
+    window.alert(msg);
+  }
+}
 
+export default function Settings() {
+  const [settings, setSettings] = useState({
+    channels: { EMAIL: false, SMS: false, WHATSAPP: false },
+    providers: { EMAIL: { available: true }, SMS: { available: true }, WHATSAPP: { available: true } },
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [testDestination, setTestDestination] = useState({ EMAIL: '', SMS: '', WHATSAPP: '' });
+  const [testing, setTesting] = useState({ EMAIL: false, SMS: false, WHATSAPP: false });
+
+  // Load combined settings: try provider-specific endpoint first, fallback to generic
   const load = async () => {
     setLoading(true);
+    setError('');
     try {
-      const { data } = await SettingsApi.get();
-      if (data) setSettings(data);
-    } catch {
-      // tolerate if backend not ready
+      // Prefer provider-specific settings if available
+      let providerResp = null;
+      try {
+        providerResp = await SettingsApi.getProviderSettings();
+      } catch {
+        // ignore if endpoint missing; will fallback
+      }
+
+      if (providerResp?.data) {
+        const data = providerResp.data || {};
+        // Expect shape: { channels: {EMAIL: bool,...}, providers: {EMAIL:{available:bool},...}}
+        setSettings({
+          channels: data.channels || { EMAIL: false, SMS: false, WHATSAPP: false },
+          providers: data.providers || {
+            EMAIL: { available: true },
+            SMS: { available: true },
+            WHATSAPP: { available: true },
+          },
+        });
+      } else {
+        const { data } = await SettingsApi.get();
+        setSettings({
+          channels: data?.channels || { EMAIL: false, SMS: false, WHATSAPP: false },
+          providers:
+            data?.providers || {
+              EMAIL: { available: true },
+              SMS: { available: true },
+              WHATSAPP: { available: true },
+            },
+        });
+      }
+    } catch (e) {
+      setError(e?.response?.data?.message || 'Failed to load settings.');
     } finally {
       setLoading(false);
     }
@@ -23,74 +69,118 @@ export default function Settings() {
     load();
   }, []);
 
+  const availableChannels = useMemo(() => {
+    const prov = settings.providers || {};
+    return ['EMAIL', 'SMS', 'WHATSAPP'].filter((k) => prov?.[k]?.available !== false);
+  }, [settings.providers]);
+
   const toggle = async (channel) => {
     const enabled = !(settings?.channels?.[channel]);
+    // optimistic update
     setSettings((s) => ({ ...s, channels: { ...(s.channels || {}), [channel]: enabled } }));
     try {
       await SettingsApi.toggleChannel(channel, enabled);
-    } catch {
-      window.alert('Failed to update channel toggle.');
+      toast(`Channel ${channel} ${enabled ? 'enabled' : 'disabled'}.`);
+    } catch (e) {
+      // revert
+      setSettings((s) => ({ ...s, channels: { ...(s.channels || {}), [channel]: !enabled } }));
+      toast(e?.response?.data?.message || 'Failed to update channel toggle.', true);
     }
   };
 
   const onSave = async () => {
     setSaving(true);
     try {
-      await SettingsApi.update(settings);
-      window.alert('Settings saved.');
+      // Try provider-specific update first, fallback to generic update
+      try {
+        await SettingsApi.updateProviderSettings({
+          channels: settings.channels,
+        });
+      } catch {
+        await SettingsApi.update({ channels: settings.channels });
+      }
+      toast('Settings saved.');
     } catch (e) {
-      window.alert(e?.response?.data?.message || 'Save failed.');
+      toast(e?.response?.data?.message || 'Save failed.', true);
     } finally {
       setSaving(false);
     }
   };
 
-  const onTestSend = async () => {
+  const onTestSend = async (channel) => {
+    const to = (testDestination?.[channel] || '').trim();
+    if (!to) {
+      toast(`Please enter a destination for ${channel} test.`, true);
+      return;
+    }
+    setTesting((s) => ({ ...s, [channel]: true }));
     try {
-      await SettingsApi.testReminder({
-        email: test.email || undefined,
-        phone: test.phone || undefined,
-        channels: Object.entries(settings.channels || {}).filter(([, v]) => v).map(([k]) => k),
-      });
-      window.alert('Test reminder sent.');
-    } catch {
-      window.alert('Test send failed.');
+      await SettingsApi.testSend(channel, to);
+      toast(`Test ${channel} sent to ${to}.`);
+    } catch (e) {
+      toast(e?.response?.data?.message || `Test ${channel} failed.`, true);
+    } finally {
+      setTesting((s) => ({ ...s, [channel]: false }));
     }
   };
 
   return (
     <div>
       <h2>Settings</h2>
-      {loading && <div>Loading...</div>}
+      {loading && <div>Loading settings...</div>}
+      {error && <div className="text-muted" style={{ color: 'var(--error)', marginTop: 8 }}>{error}</div>}
 
+      {/* Channel toggles */}
       <div className="card" style={{ padding: 16, marginTop: 12 }}>
-        <div className="card-header">Notification Channels</div>
+        <div className="card-header">Messaging Providers</div>
         <div className="card-body">
-          {['EMAIL', 'SMS', 'WHATSAPP'].map((ch) => (
-            <label key={ch} className="helper-row" style={{ gap: 8, alignItems: 'center', marginBottom: 8 }}>
-              <input type="checkbox" checked={!!settings?.channels?.[ch]} onChange={() => toggle(ch)} />
-              <span>{ch}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: 16, marginTop: 12 }}>
-        <div className="card-header">General</div>
-        <div className="card-body">
-          {/* Add other settings fields as necessary */}
-          <button className="btn" onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: 16, marginTop: 12 }}>
-        <div className="card-header">Test Reminder</div>
-        <div className="card-body">
-          <div className="helper-row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <input className="input" type="email" placeholder="Test email" value={test.email} onChange={(e) => setTest((s) => ({ ...s, email: e.target.value }))} />
-            <input className="input" placeholder="Test phone" value={test.phone} onChange={(e) => setTest((s) => ({ ...s, phone: e.target.value }))} />
-            <button className="btn" onClick={onTestSend}>Send Test</button>
+          <div className="text-muted" style={{ marginBottom: 8 }}>
+            Enable channels available per environment (email, SMS, WhatsApp).
           </div>
+          {availableChannels.map((ch) => (
+            <div key={ch} className="helper-row" style={{ gap: 8, alignItems: 'center', marginBottom: 8, justifyContent: 'space-between' }}>
+              <label className="helper-row" style={{ gap: 8, alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={!!settings?.channels?.[ch]}
+                  onChange={() => toggle(ch)}
+                />
+                <span>{ch}</span>
+              </label>
+              <div className="helper-row" style={{ gap: 8 }}>
+                <input
+                  className="input"
+                  style={{ minWidth: 220 }}
+                  type={ch === 'EMAIL' ? 'email' : 'text'}
+                  placeholder={ch === 'EMAIL' ? 'test@example.com' : ch === 'SMS' ? '+15551234567' : 'WhatsApp number'}
+                  value={testDestination[ch] || ''}
+                  onChange={(e) =>
+                    setTestDestination((s) => ({ ...s, [ch]: e.target.value }))
+                  }
+                />
+                <button
+                  className="btn secondary"
+                  onClick={() => onTestSend(ch)}
+                  disabled={testing[ch]}
+                >
+                  {testing[ch] ? 'Sending...' : `Test ${ch}`}
+                </button>
+              </div>
+            </div>
+          ))}
+          {availableChannels.length === 0 && (
+            <div className="text-muted">No messaging providers are available in this environment.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Save */}
+      <div className="card" style={{ padding: 16, marginTop: 12 }}>
+        <div className="card-header">Save</div>
+        <div className="card-body">
+          <button className="btn" onClick={onSave} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Settings'}
+          </button>
         </div>
       </div>
     </div>
